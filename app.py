@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 import cv2
 import numpy as np
 import os
@@ -14,7 +14,7 @@ CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", 0.5))
 
 # --- Pre-load Model (Load once when the app starts) ---
 CLASSES = ["background", "aeroplane", "bicycle", "bird", "boat",
-           "bottle", "bus", "car", "cat", "chair", "cow", "diningtable",
+           "bottle", "bus", "car", "cat", "spoon", "chair","apple", "cow", "diningtable",
            "dog", "horse", "motorbike", "person", "pottedplant", "sheep",
            "sofa", "train", "tvmonitor"]
 
@@ -62,20 +62,30 @@ def detect_objects(image_bytes):
         net.setInput(blob)
         detections = net.forward()
 
-        detected_objects = []
+        # CHANGE: Now store details for each detection
+        results = []
         # Process detections
         for i in np.arange(0, detections.shape[2]):
             confidence = detections[0, 0, i, 2]
             if confidence > CONFIDENCE_THRESHOLD:
                 idx = int(detections[0, 0, i, 1])
                 if idx < len(CLASSES):
-                    detected_objects.append(CLASSES[idx])
+                    # Compute the (x, y)-coordinates of the bounding box
+                    box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
+                    (startX, startY, endX, endY) = box.astype("int")
+
+                    # Append details to results list
+                    label = CLASSES[idx]
+                    results.append({
+                        "label": label,
+                        "confidence": float(confidence), # Ensure JSON serializable
+                        "box": [int(startX), int(startY), int(endX), int(endY)] # Ensure JSON serializable
+                    })
                 else:
                      print(f"[WARNING] Invalid class index {idx} detected, skipping.")
 
-        # Remove duplicates if desired, or return all instances
-        # return list(set(detected_objects)), None # Unique objects
-        return detected_objects, None # All detected objects (including duplicates)
+        # return detected_objects, None # Old way
+        return results, None # Return the detailed list
 
     except Exception as e:
         print(f"[ERROR] Error during object detection: {e}")
@@ -83,9 +93,10 @@ def detect_objects(image_bytes):
 
 # --- Routes ---
 @app.route("/")
-def hello_world():
-    """Simple GET endpoint for testing."""
-    return "hello-world"
+def serve_index():
+    """Serves the index.html file."""
+    # Serve index.html from the current directory ('.')
+    return send_from_directory('.', 'index.html')
 
 @app.route("/image-upload", methods=["POST"])
 def handle_image_upload():
@@ -105,14 +116,24 @@ def handle_image_upload():
         img_bytes = file.read()
 
         # Perform detection
-        objects, error_msg = detect_objects(img_bytes)
+        print("[DEBUG] Calling detect_objects...")
+        detection_results, error_msg = detect_objects(img_bytes)
+        print(f"[DEBUG] detect_objects returned: results={detection_results}, error='{error_msg}'")
 
         if error_msg:
-            return jsonify({"error": error_msg}), 500
+            response_data = {"error": error_msg}
+            print(f"[DEBUG] Returning error JSON: {response_data}")
+            return jsonify(response_data), 500
 
-        return jsonify({"detected_objects": objects})
+        # CHANGE: Return the detailed detection results
+        response_data = {"detections": detection_results}
+        print(f"[DEBUG] Returning success JSON: {response_data}")
+        return jsonify(response_data)
 
-    return jsonify({"error": "An unknown error occurred"}), 500
+    # This part should ideally not be reached if file checks are robust
+    response_data = {"error": "An unknown error occurred after file handling."}
+    print(f"[DEBUG] Returning fallback error JSON: {response_data}")
+    return jsonify(response_data), 500
 
 # --- Main Execution ---
 if __name__ == "__main__":

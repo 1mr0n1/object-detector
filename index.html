@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Object Detector</title>
+    <style>
+        :root {
+            --primary-color: #007bff;
+            --light-gray: #f8f9fa;
+            --dark-gray: #343a40;
+            --border-color: #dee2e6;
+            --success-color: #28a745;
+            --error-color: #dc3545;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            background-color: var(--light-gray);
+            color: var(--dark-gray);
+            min-height: 100vh;
+            box-sizing: border-box;
+        }
+
+        .container {
+            background-color: #ffffff;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 700px;
+            text-align: center;
+        }
+
+        h1 {
+            color: var(--primary-color);
+            margin-bottom: 25px;
+        }
+
+        /* Style the file input button */
+        .file-input-label {
+            display: inline-block;
+            padding: 10px 20px;
+            background-color: var(--primary-color);
+            color: white;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+            margin-bottom: 20px;
+        }
+        .file-input-label:hover {
+            background-color: #0056b3;
+        }
+        #imageInput {
+            display: none; /* Hide the default input */
+        }
+
+        .image-display-area {
+            margin-top: 20px;
+            position: relative; /* Needed for spinner positioning */
+            min-height: 100px; /* Prevent collapsing */
+        }
+
+        #imagePreview,
+        #canvasOutput {
+            max-width: 100%;
+            max-height: 450px;
+            display: block;
+            margin: 0 auto 10px auto; /* Center the image/canvas */
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+        }
+
+        /* Loading Spinner */
+        .spinner {
+            border: 5px solid var(--light-gray);
+            border-top: 5px solid var(--primary-color);
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            display: none; /* Hidden by default */
+            z-index: 10;
+        }
+
+        @keyframes spin {
+            0% { transform: translate(-50%, -50%) rotate(0deg); }
+            100% { transform: translate(-50%, -50%) rotate(360deg); }
+        }
+
+        #status {
+            margin-top: 15px;
+            font-style: italic;
+            color: #555;
+            min-height: 1.2em;
+        }
+        #status.error {
+            color: var(--error-color);
+            font-weight: bold;
+        }
+        #status.success {
+            color: var(--success-color);
+        }
+
+        #resultsList {
+            margin-top: 20px;
+            text-align: left;
+            padding: 15px;
+            border: 1px solid var(--border-color);
+            border-radius: 5px;
+            background-color: var(--light-gray);
+            display: none; /* Hidden initially */
+        }
+        #resultsList h3 {
+            margin-top: 0;
+            color: var(--primary-color);
+        }
+        #resultsList ul {
+            list-style: none;
+            padding: 0;
+        }
+        #resultsList li {
+            padding: 5px 0;
+            border-bottom: 1px solid #eee;
+        }
+        #resultsList li:last-child {
+            border-bottom: none;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Object Detector</h1>
+
+        <label for="imageInput" class="file-input-label">Choose Image</label>
+        <input type="file" id="imageInput" accept="image/*">
+
+        <div id="status">Select an image file to start detection.</div>
+
+        <div class="image-display-area">
+            <div class="spinner" id="loadingSpinner"></div>
+            <!-- Preview image element -->
+            <img id="imagePreview" src="#" alt="Image Preview" style="display: none;"/>
+            <!-- Canvas for drawing output -->
+            <canvas id="canvasOutput"></canvas>
+        </div>
+
+        <!-- Area to list detected objects -->
+        <div id="resultsList">
+            <h3>Detected Objects:</h3>
+            <ul id="detectedItems"></ul>
+        </div>
+    </div>
+
+    <script>
+        const imageInput = document.getElementById('imageInput');
+        const imagePreview = document.getElementById('imagePreview');
+        const canvas = document.getElementById('canvasOutput');
+        const ctx = canvas.getContext('2d');
+        const statusDiv = document.getElementById('status');
+        const loadingSpinner = document.getElementById('loadingSpinner');
+        const resultsListDiv = document.getElementById('resultsList');
+        const detectedItemsUl = document.getElementById('detectedItems');
+
+        let originalImage = null;
+
+        imageInput.addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            resetUI(); // Clear previous results
+
+            if (!file) {
+                setStatus('No file selected.');
+                return;
+            }
+
+            if (!file.type.startsWith('image/')) {
+                setStatus('Please select an image file.', true); // Mark as error
+                return;
+            }
+
+            setStatus('Loading preview...');
+            const reader = new FileReader();
+
+            reader.onload = function(e) {
+                imagePreview.src = e.target.result;
+                imagePreview.style.display = 'block';
+
+                originalImage = new Image();
+                originalImage.onload = () => {
+                    sendImageToBackend(file);
+                }
+                originalImage.onerror = () => {
+                     setStatus('Error loading image preview.', true);
+                }
+                originalImage.src = e.target.result;
+            }
+            reader.readAsDataURL(file);
+        });
+
+        function sendImageToBackend(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            showLoading(true);
+            setStatus('Detecting objects...');
+
+            fetch('/image-upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => {
+                showLoading(false);
+                if (!response.ok) {
+                    // Try to parse error from JSON, otherwise use status text
+                    return response.json().then(err => {
+                        throw new Error(err.error || `Server error: ${response.statusText}`);
+                    }).catch(() => {
+                        // If parsing JSON fails (e.g., HTML error page)
+                         throw new Error(`Server error: ${response.status} ${response.statusText}`);
+                    });
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.error) { // Should be caught above, but check again
+                   throw new Error(data.error);
+                }
+                setStatus(`Detection complete. Found ${data.detections.length} objects.`, false, true);
+                console.log('Detections:', data.detections);
+                drawDetections(data.detections);
+                displayResultsList(data.detections);
+            })
+            .catch(error => {
+                showLoading(false);
+                console.error('Error:', error);
+                setStatus(`Error: ${error.message}`, true);
+                // Keep the preview visible on error
+                imagePreview.style.display = 'block';
+                canvas.style.display = 'none';
+            });
+        }
+
+        function drawDetections(detections) {
+            if (!originalImage) {
+                setStatus('Error: Original image data missing.', true);
+                return;
+            }
+
+            canvas.width = originalImage.naturalWidth;
+            canvas.height = originalImage.naturalHeight;
+            ctx.drawImage(originalImage, 0, 0);
+
+            imagePreview.style.display = 'none';
+            canvas.style.display = 'block';
+
+            const colors = ['#ff3838', '#ffb838', '#48ff38', '#387eff', '#a638ff', '#ff38cd'];
+            let colorIndex = 0;
+
+            detections.forEach(det => {
+                const [startX, startY, endX, endY] = det.box;
+                const label = det.label;
+                const confidence = det.confidence;
+                const color = colors[colorIndex % colors.length];
+                colorIndex++;
+
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 3;
+                ctx.strokeRect(startX, startY, endX - startX, endY - startY);
+
+                ctx.fillStyle = color;
+                ctx.font = '16px Arial';
+                const text = `${label}: ${confidence.toFixed(2)}`;
+                const textMetrics = ctx.measureText(text);
+                const textWidth = textMetrics.width;
+                const textHeight = 16; // Approximate height based on font size
+
+                let textX = startX + 2;
+                let textY = startY - 7;
+
+                 // Draw background rect for text
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'; // Semi-transparent black background
+                ctx.fillRect(textX - 2 , textY - textHeight, textWidth + 4, textHeight + 4);
+
+                // Adjust if text goes off the top
+                if (textY < textHeight + 2) {
+                    textY = startY + textHeight + 7; // Move below box if too high
+                     ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'; // Redraw background if moved
+                     ctx.fillRect(textX -2 , textY - textHeight, textWidth + 4, textHeight + 4);
+                }
+
+                ctx.fillStyle = '#ffffff'; // White text
+                ctx.fillText(text, textX, textY);
+            });
+        }
+
+        function displayResultsList(detections) {
+            detectedItemsUl.innerHTML = ''; // Clear previous list
+            if (detections.length > 0) {
+                detections.forEach(det => {
+                    const li = document.createElement('li');
+                    li.textContent = `${det.label} (Confidence: ${det.confidence.toFixed(2)})`;
+                    detectedItemsUl.appendChild(li);
+                });
+                resultsListDiv.style.display = 'block';
+            } else {
+                resultsListDiv.style.display = 'none';
+            }
+        }
+
+        function showLoading(show) {
+            loadingSpinner.style.display = show ? 'block' : 'none';
+            // Optionally disable input while loading
+            imageInput.disabled = show;
+        }
+
+        function setStatus(message, isError = false, isSuccess = false) {
+            statusDiv.textContent = message;
+            statusDiv.className = ''; // Reset classes
+            if (isError) {
+                statusDiv.classList.add('error');
+            } else if (isSuccess) {
+                statusDiv.classList.add('success');
+            }
+        }
+
+        function resetUI() {
+            setStatus('Select an image file to start detection.');
+            imagePreview.style.display = 'none';
+            imagePreview.src = '#';
+            canvas.style.display = 'none';
+            ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear canvas content
+            resultsListDiv.style.display = 'none';
+            detectedItemsUl.innerHTML = '';
+            originalImage = null;
+            // If file input still holds a value, clear it (optional, browser support varies)
+            imageInput.value = null;
+        }
+
+    </script>
+
+</body>
+</html> 
